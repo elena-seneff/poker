@@ -12,7 +12,7 @@ import logging
 import random
 
 
-class HybridBot(PokerBotAPI):
+class MyBot(PokerBotAPI):
     """
     Hybrid Bot - mixes conservative preflop selection with aggressive postflop and adaptive
     tendencies. Plays tight with strong starting hands but will semi-bluff and raise

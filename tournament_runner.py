@@ -3,6 +3,7 @@ Main Tournament Runner
 Orchestrates the entire poker tournament from start to finish
 """
 import logging
+import sys
 import time
 import random
 from typing import List, Dict, Any, Optional
@@ -50,14 +51,22 @@ class TournamentRunner:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         log_filename = os.path.join(self.log_directory, f"tournament_{timestamp}.log")
         
-        # Configure logging
+        # Try to ensure console uses UTF-8 to avoid encoding issues with card suits
+        try:
+            if hasattr(sys.stdout, 'reconfigure'):
+                sys.stdout.reconfigure(encoding='utf-8')
+        except Exception:
+            # Best-effort; if it fails continue without raising
+            pass
+
+        # Configure logging with UTF-8 file handler and console stream
+        file_handler = logging.FileHandler(log_filename, encoding='utf-8')
+        console_handler = logging.StreamHandler(sys.stdout)
+
         logging.basicConfig(
             level=logging.DEBUG,
             format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-            handlers=[
-                logging.FileHandler(log_filename),
-                logging.StreamHandler()  # Also log to console
-            ]
+            handlers=[file_handler, console_handler]
         )
     
     def run_tournament(self) -> Dict[str, Any]:
