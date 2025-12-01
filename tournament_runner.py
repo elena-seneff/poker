@@ -120,11 +120,34 @@ class TournamentRunner:
     
     def run_tournament_round(self):
         """Run one round of hands across all active tables"""
-        active_tables = {tid: table for tid, table in self.tournament.tables.items() 
+        active_tables = {tid: table for tid, table in self.tournament.tables.items()
                         if len(table.get_active_players()) >= 2}
-        
+
+        # If there are no tables with at least 2 active players, either rebalance
+        # or mark the tournament complete to avoid spinning indefinitely.
         if not active_tables:
-            return
+            active_players = self.tournament.get_active_players()
+            # If tournament has 1 or 0 active players, mark complete
+            if len(active_players) <= 1:
+                self.logger.info("No active tables and <=1 active players — finishing tournament")
+                self.tournament.tournament_complete = True
+                return
+
+            # Otherwise try rebalancing tables to put players together
+            try:
+                self.logger.info("No tables with >=2 players — attempting to rebalance tables")
+                self.tournament.rebalance_tables()
+            except Exception as e:
+                self.logger.error(f"Error during rebalance: {e}")
+            # Recompute active_tables after rebalance
+            active_tables = {tid: table for tid, table in self.tournament.tables.items()
+                             if len(table.get_active_players()) >= 2}
+
+            # If still no active tables after rebalance, mark tournament complete
+            if not active_tables:
+                self.logger.warning("Rebalance did not produce playable tables — ending tournament")
+                self.tournament.tournament_complete = True
+                return
         
         # Start games on all active tables
         self.current_games = {}

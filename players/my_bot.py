@@ -6,81 +6,160 @@ from abc import ABC, abstractmethod
 
 from bot_api import PokerBotAPI, PlayerAction, GameInfoAPI
 from typing import List, Dict, Optional
-from engine.cards import Card
-from engine.poker_game import GameState, PlayerAction
+from engine.cards import Card, Rank, HandEvaluator
+from engine.poker_game import GameState
 import logging
+import random
 
 
-class MyBot(PokerBotAPI):
+class HybridBot(PokerBotAPI):
     """
-    Abstract base class that all poker bots must inherit from.
-    Students implement the required methods to create their bot strategy.
+    Hybrid Bot - mixes conservative preflop selection with aggressive postflop and adaptive
+    tendencies. Plays tight with strong starting hands but will semi-bluff and raise
+    with draws or when table dynamics favour aggression.
     """
-    
     def __init__(self, name: str):
-        self.name = name
-        self.logger = logging.getLogger(f"bot.{name}")
-    
-    @abstractmethod
-    def get_action(self, game_state: GameState, hole_cards: List[Card], 
+        super().__init__(name)
+        self.hands_played = 0
+        self.hands_won = 0
+        # Aggro/conservative knobs
+        self.raise_frequency = 0.5
+        self.play_frequency = 0.75
+
+        # Strong starting hands (conservative core)
+        self.premium_hands = [
+            (Rank.ACE, Rank.ACE), (Rank.KING, Rank.KING), (Rank.QUEEN, Rank.QUEEN),
+            (Rank.JACK, Rank.JACK), (Rank.TEN, Rank.TEN),
+            (Rank.ACE, Rank.KING), (Rank.ACE, Rank.QUEEN), (Rank.KING, Rank.QUEEN)
+        ]
+
+        self.good_suited_connectors = [
+            (Rank.KING, Rank.JACK), (Rank.QUEEN, Rank.JACK), (Rank.JACK, Rank.TEN),
+            (Rank.TEN, Rank.NINE), (Rank.NINE, Rank.EIGHT)
+        ]
+
+    def get_action(self, game_state: GameState, hole_cards: List[Card],
                    legal_actions: List[PlayerAction], min_bet: int, max_bet: int) -> tuple:
-        """
-        Decide what action to take given the current game state.
-        
-        Args:
-            game_state: Current state of the poker game
-            hole_cards: Your two hole cards
-            legal_actions: List of actions you can legally take
-            min_bet: Minimum bet amount (for raises)
-            max_bet: Maximum bet amount (your remaining chips + current bet)
-        
-        Returns:
-            tuple: (PlayerAction, amount)
-            - For FOLD, CHECK, CALL, ALL_IN: amount should be 0
-            - For RAISE: amount should be the total bet amount (not additional amount)
-        
-        Examples:
-            return (PlayerAction.FOLD, 0)
-            return (PlayerAction.CALL, 0)  
-            return (PlayerAction.RAISE, 100)  # Raise to 100 total
-            return (PlayerAction.ALL_IN, 0)
-        """
-        pass
-    
-    @abstractmethod
+        if game_state.round_name == "preflop":
+            return self._preflop_strategy(game_state, hole_cards, legal_actions, min_bet, max_bet)
+        return self._postflop_strategy(game_state, hole_cards, legal_actions, min_bet, max_bet)
+
+    def _preflop_strategy(self, game_state: GameState, hole_cards: List[Card], legal_actions: List[PlayerAction],
+                          min_bet: int, max_bet: int) -> tuple:
+        # Safety checks
+        if len(hole_cards) != 2:
+            return PlayerAction.FOLD, 0
+
+        # Randomly fold a portion of weak hands (aggressive mix)
+        if random.random() > self.play_frequency:
+            if PlayerAction.CHECK in legal_actions:
+                return PlayerAction.CHECK, 0
+            return PlayerAction.FOLD, 0
+
+        c1, c2 = hole_cards
+        hand1 = (c1.rank, c2.rank)
+        hand2 = (c2.rank, c1.rank)
+
+        is_premium = (hand1 in self.premium_hands or hand2 in self.premium_hands)
+        is_suited_connector = (c1.suit == c2.suit and (hand1 in self.good_suited_connectors or hand2 in self.good_suited_connectors))
+        is_pair = c1.rank == c2.rank
+
+        # Conservative baseline: play only strong hands, but allow occasional loosening
+        if not (is_premium or is_suited_connector or is_pair):
+            # occasionally limp/call as an aggressive element
+            if PlayerAction.CALL in legal_actions and random.random() < 0.12:
+                return PlayerAction.CALL, 0
+            if PlayerAction.CHECK in legal_actions:
+                return PlayerAction.CHECK, 0
+            return PlayerAction.FOLD, 0
+
+        # If we have a playable hand, decide to raise occasionally
+        if PlayerAction.RAISE in legal_actions and random.random() < self.raise_frequency:
+            raise_amount = min(int(random.uniform(2.5, 4.0) * game_state.big_blind), max_bet)
+            raise_amount = max(raise_amount, min_bet)
+            return PlayerAction.RAISE, raise_amount
+
+        if PlayerAction.CALL in legal_actions:
+            return PlayerAction.CALL, 0
+
+        return PlayerAction.CHECK, 0
+
+    def _postflop_strategy(self, game_state: GameState, hole_cards: List[Card], legal_actions: List[PlayerAction],
+                           min_bet: int, max_bet: int) -> tuple:
+        all_cards = hole_cards + game_state.community_cards
+        hand_type, _, _ = HandEvaluator.evaluate_best_hand(all_cards)
+        hand_rank = HandEvaluator.HAND_RANKINGS[hand_type]
+
+        # Strong made hands (two pair or better): be aggressive
+        if hand_rank >= HandEvaluator.HAND_RANKINGS['two_pair']:
+            if PlayerAction.RAISE in legal_actions:
+                raise_amount = min(game_state.pot, max_bet)
+                raise_amount = max(raise_amount, min_bet)
+                return PlayerAction.RAISE, raise_amount
+            if PlayerAction.CALL in legal_actions:
+                return PlayerAction.CALL, 0
+            return PlayerAction.CHECK, 0
+
+        # Top pair / one pair: mostly call or check
+        if hand_rank >= HandEvaluator.HAND_RANKINGS['pair']:
+            to_call = game_state.current_bet - game_state.player_bets.get(self.name, 0)
+            if PlayerAction.CALL in legal_actions and to_call <= game_state.pot // 4:
+                return PlayerAction.CALL, 0
+            if PlayerAction.CHECK in legal_actions:
+                return PlayerAction.CHECK, 0
+
+        # Strong draws: semi-bluff sometimes
+        if self._has_strong_draw(all_cards):
+            if PlayerAction.RAISE in legal_actions and random.random() < 0.4:
+                raise_amount = min(game_state.pot // 2, max_bet)
+                raise_amount = max(raise_amount, min_bet)
+                return PlayerAction.RAISE, raise_amount
+            if PlayerAction.CALL in legal_actions:
+                return PlayerAction.CALL, 0
+
+        # If nothing, prefer to check, otherwise fold
+        if PlayerAction.CHECK in legal_actions:
+            return PlayerAction.CHECK, 0
+        return PlayerAction.FOLD, 0
+
+    def _has_strong_draw(self, all_cards: List[Card]) -> bool:
+        suits = [c.suit for c in all_cards]
+        for s in set(suits):
+            if suits.count(s) >= 4:
+                return True
+
+        ranks = sorted(list(set(c.rank.value for c in all_cards)))
+        if len(ranks) >= 4:
+            for i in range(len(ranks) - 3):
+                if ranks[i+3] - ranks[i] == 3:
+                    return True
+        # Ace-low consideration
+        rset = set(ranks)
+        if rset.issuperset({14, 2, 3, 4}) or rset.issuperset({2,3,4,5}):
+            return True
+        return False
+
     def hand_complete(self, game_state: GameState, hand_result: Dict[str, any]):
-        """
-        Called when a hand is complete. Use this to learn from the results.
-        
-        Args:
-            game_state: Final game state
-            hand_result: Dictionary containing:
-                - 'winners': List of winning players
-                - 'winning_hands': Dict of player -> best hand
-                - 'pot_distribution': Dict of player -> winnings
-                - 'showdown_hands': Dict of all revealed hands (if showdown)
-        """
-        pass
-    
+        self.hands_played += 1
+        if 'winners' in hand_result and self.name in hand_result['winners']:
+            self.hands_won += 1
+            # win -> slightly more aggressive
+            self.raise_frequency = min(0.8, self.raise_frequency + 0.02)
+            self.play_frequency = min(0.9, self.play_frequency + 0.01)
+        else:
+            # loss -> tighten up slightly
+            self.raise_frequency = max(0.3, self.raise_frequency - 0.01)
+            self.play_frequency = max(0.6, self.play_frequency - 0.01)
+
     def tournament_start(self, players: List[str], starting_chips: int):
-        """
-        Called when tournament starts.
-        
-        Args:
-            players: List of all player names in tournament
-            starting_chips: Starting chip count for each player
-        """
-        self.logger.info(f"Tournament starting with {len(players)} players")
-    
-    def tournament_end(self, final_standings: List[tuple]):
-        """
-        Called when tournament ends.
-        
-        Args:
-            final_standings: List of (player_name, final_chips, placement) tuples
-        """
-        placement = next(place for name, chips, place in final_standings if name == self.name)
-        self.logger.info(f"Tournament ended. Final placement: {placement}")
+        super().tournament_start(players, starting_chips)
+        n = len(players)
+        if n <= 4:
+            self.raise_frequency = 0.6
+            self.play_frequency = 0.85
+        elif n >= 8:
+            self.raise_frequency = 0.45
+            self.play_frequency = 0.7
 
 
 class GameInfoAPI:
@@ -200,4 +279,78 @@ class GameInfoAPI:
             str: Formatted string representation
         """
         return ', '.join(str(card) for card in cards)
+
+    @staticmethod
+    def evaluate_hand(all_cards: List[Card]) -> Dict[str, any]:
+        """
+        Evaluate the best hand and return a dict with type and rank value.
+        """
+        hand_type, best_hand, hand_info = HandEvaluator.evaluate_best_hand(all_cards)
+        rank_value = HandEvaluator.HAND_RANKINGS.get(hand_type, 0)
+        return {"hand_type": hand_type, "rank": rank_value, "best_hand": best_hand, "info": hand_info}
+
+    @staticmethod
+    def has_flush_draw(all_cards: List[Card]) -> bool:
+        """Return True if there is a 4-card flush draw among the provided cards."""
+        suits = [c.suit for c in all_cards]
+        for s in set(suits):
+            if suits.count(s) >= 4:
+                return True
+        return False
+
+    @staticmethod
+    def has_open_ended_straight_draw(all_cards: List[Card]) -> bool:
+        """Return True for open-ended straight draws (4 cards to a straight)."""
+        ranks = sorted(list(set(c.rank.value for c in all_cards)))
+        if len(ranks) < 4:
+            return False
+        for i in range(len(ranks) - 3):
+            if ranks[i+3] - ranks[i] == 3:
+                return True
+        # Ace-low consideration
+        rset = set(ranks)
+        if rset.issuperset({14, 2, 3, 4}) or rset.issuperset({2, 3, 4, 5}):
+            return True
+        return False
+
+    @staticmethod
+    def get_draws(all_cards: List[Card]) -> Dict[str, bool]:
+        """Convenience aggregator returning detected draw types."""
+        return {
+            "flush_draw": GameInfoAPI.has_flush_draw(all_cards),
+            "straight_draw": GameInfoAPI.has_open_ended_straight_draw(all_cards)
+        }
+
+    @staticmethod
+    def recommend_aggression(game_state: GameState, player_name: str, all_cards: List[Card]) -> str:
+        """
+        Recommend a coarse aggression level: 'raise', 'call', or 'check_fold'.
+        Uses made-hand rank, draw presence and pot odds to decide.
+        """
+        evald = GameInfoAPI.evaluate_hand(all_cards)
+        rank = evald["rank"]
+
+        # Strong made hands -> raise
+        if rank >= HandEvaluator.HAND_RANKINGS.get('two_pair', 2):
+            return 'raise'
+
+        # Top pair / pair -> call unless bet is large
+        if rank >= HandEvaluator.HAND_RANKINGS.get('pair', 1):
+            to_call = game_state.current_bet - game_state.player_bets.get(player_name, 0)
+            if to_call <= game_state.pot // 3:
+                return 'call'
+            return 'check_fold'
+
+        # Draws: semi-bluff if pot odds and position look favourable
+        draws = GameInfoAPI.get_draws(all_cards)
+        if draws['flush_draw'] or draws['straight_draw']:
+            to_call = game_state.current_bet - game_state.player_bets.get(player_name, 0)
+            pot_odds = GameInfoAPI.get_pot_odds(game_state.pot, to_call)
+            pos = GameInfoAPI.get_position_info(game_state, player_name)
+            # favourable if pot odds > 3:1 or acting last
+            if pot_odds >= 3 or pos.get('is_last', False):
+                return 'raise'
+            return 'call'
+
+        return 'check_fold'
 
