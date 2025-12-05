@@ -72,7 +72,7 @@ class ConservativeBot(PokerBotAPI):
         if PlayerAction.CALL in legal_actions:
             return PlayerAction.CALL, 0
             
-        return PlayerAction.CHECK, 0
+        return PlayerAction.FOLD, 0
 
     def _postflop_strategy(self, game_state: GameState, hole_cards: List[Card], 
                            legal_actions: List[PlayerAction], min_bet: int, max_bet: int) -> tuple:
@@ -110,6 +110,8 @@ class ConservativeBot(PokerBotAPI):
             pot_odds = GameInfoAPI.get_pot_odds(game_state.pot, game_state.current_bet - game_state.player_bets[self.name])
             if PlayerAction.CALL in legal_actions and pot_odds > 4: # Need 4:1 for a flush draw
                  return PlayerAction.CALL, 0
+            
+            return PlayerAction.FOLD, 0
 
         # Nothing good, fold
         if PlayerAction.CHECK in legal_actions:
