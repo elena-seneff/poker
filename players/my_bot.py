@@ -37,10 +37,7 @@ class MyBot(PokerBotAPI):
     
     def get_action(self, game_state: GameState, hole_cards: List[Card], 
                    legal_actions: List[PlayerAction], min_bet: int, max_bet: int) -> tuple:
-        """
-        Decide what action to take given the current game state.
-        Delegates to preflop or postflop strategy.
-        """
+    
         if game_state.round_name == "preflop":
             return self._preflop_strategy(game_state, hole_cards, legal_actions, min_bet, max_bet)
         else:
@@ -48,7 +45,6 @@ class MyBot(PokerBotAPI):
 
     def _preflop_strategy(self, game_state: GameState, hole_cards: List[Card], legal_actions: List[PlayerAction], 
                           min_bet: int, max_bet: int) -> tuple:
-        """Preflop logic based on premium and suited/connected hands."""
         
         if len(hole_cards) != 2:
             return PlayerAction.FOLD, 0
@@ -83,7 +79,6 @@ class MyBot(PokerBotAPI):
 
     def _postflop_strategy(self, game_state: GameState, hole_cards: List[Card], 
                           legal_actions: List[PlayerAction], min_bet: int, max_bet: int) -> tuple:
-        """Postflop logic based on made hands, strong draws, and bluffs."""
 
         all_cards = hole_cards + game_state.community_cards
         # This requires the HandEvaluator class to be defined/available
@@ -124,7 +119,6 @@ class MyBot(PokerBotAPI):
         return PlayerAction.FOLD, 0
     
     def _has_strong_draw(self, all_cards: List[Card]) -> bool:
-        """Check for strong drawing hands (flush or open-ended straight)"""
         # Flush draw (4 cards of the same suit)
         suits = [card.suit for card in all_cards]
         for suit in set(suits):
@@ -148,7 +142,6 @@ class MyBot(PokerBotAPI):
         return False
 
     def hand_complete(self, game_state: GameState, hand_result: Dict[str, any]):
-        """Adaptive learning: adjust aggression based on win/loss."""
         self.hands_played += 1
 
         if 'winners' in hand_result and self.name in hand_result['winners']:
@@ -159,7 +152,7 @@ class MyBot(PokerBotAPI):
             self.raise_frequency = max(0.3, self.raise_frequency - 0.01)
     
     def tournament_start(self, players: List[str], starting_chips: int):
-        """Adjust frequencies based on the number of players."""
+
         super().tournament_start(players, starting_chips)
         num_players = len(players)
         if num_players <= 4:
@@ -170,7 +163,7 @@ class MyBot(PokerBotAPI):
             self.play_frequency = 0.7
     
     def tournament_end(self, final_standings: List[tuple]):
-        """Called when tournament ends."""
+       
         placement = next(place for name, chips, place in final_standings if name == self.name)
         self.logger.info(f"Tournament ended. Final placement: {placement}")
 
@@ -186,8 +179,7 @@ class GameInfoAPI:
     
     @staticmethod
     def get_position_info(game_state: GameState, player_name: str) -> Dict[str, any]:
-        """Get position information for a player."""
-        # ... (implementation omitted for brevity) ...
+       
         try:
             position = game_state.active_players.index(player_name)
             current_pos = game_state.active_players.index(game_state.current_player)

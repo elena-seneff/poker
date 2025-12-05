@@ -29,15 +29,17 @@ class RandomBot(PokerBotAPI):
         
         # If raising, choose a random valid amount
         if action == PlayerAction.RAISE:
-            
             pot_raise_limit = int(game_state.pot * 1.5)
             max_raise_amount = min(pot_raise_limit, max_bet)
 
-        if max_raise_amount < min_bet:
-            max_raise_amount = min_bet
+            if max_raise_amount < min_bet:
+                max_raise_amount = min_bet
 
-        amount = random.randint(min_bet, max_raise_amount)
-        return action, amount
+            amount = random.randint(min_bet, max_raise_amount)
+            return action, amount
+
+        # For non-raise actions, amount is 0
+        return action, 0
         
     
     def hand_complete(self, game_state: GameState, hand_result: Dict[str, Any]):
