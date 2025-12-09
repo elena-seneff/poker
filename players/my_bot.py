@@ -10,10 +10,8 @@ from engine.cards import Card, Rank, HandEvaluator
 
 
 class MyBot(PokerBotAPI):
-    """
-    The main poker bot implementing the required strategy methods.
-    """
-    
+   
+
     def __init__(self, name: str):
         super().__init__(name)
         self.hands_played = 0
@@ -22,7 +20,9 @@ class MyBot(PokerBotAPI):
         self.logger = logging.getLogger(f"bot.{name}")
         # Initialize properties that may be accessed by parent or adaptive logic
         self.raise_frequency = 0.5 
-        self.play_frequency = 0.75
+        # Be a bit more aggressive preflop by default
+        self.raise_frequency = 0.6
+        self.play_frequency = 0.85
 
         self.premium_hands = [
             (Rank.ACE, Rank.ACE), (Rank.KING, Rank.KING), (Rank.QUEEN, Rank.QUEEN),
@@ -60,21 +60,56 @@ class MyBot(PokerBotAPI):
         is_pocket_pair = card1.rank == card2.rank
 
         if not (is_premium or is_suited_connector or is_pocket_pair):
+            # Play some marginal hands more often depending on play_frequency
+            if random.random() < self.play_frequency:
+                # In late position, be more likely to raise small
+                pos_info = GameInfoAPI.get_position_info(game_state, self.name)
+                late_pos = pos_info.get('players_after', 0) <= 2
+
+                if PlayerAction.RAISE in legal_actions and random.random() < (self.raise_frequency * (1.0 if late_pos else 0.5)):
+                    # Open-raise 2-3x big blind for marginal hands
+                    raise_amount = min(random.randint(2, 3) * game_state.big_blind, max_bet)
+                    raise_amount = max(raise_amount, min_bet)
+                    return PlayerAction.RAISE, raise_amount
+
+                if PlayerAction.CALL in legal_actions:
+                    return PlayerAction.CALL, 0
+
+                if PlayerAction.CHECK in legal_actions:
+                    return PlayerAction.CHECK, 0
+
+            # Otherwise fold/check conservatively
             if PlayerAction.CHECK in legal_actions:
                 return PlayerAction.CHECK, 0
             return PlayerAction.FOLD, 0
             
-        # With a good hand, either raise or call
-        if PlayerAction.RAISE in legal_actions and random.random() < self.raise_frequency:
-            # Raise 3x the big blind
-            raise_amount = min(3 * game_state.big_blind, max_bet)
-            raise_amount = max(raise_amount, min_bet)
-            return PlayerAction.RAISE, raise_amount
+        # With a good hand, either raise or call. Increase aggression for premium/pairs.
+        if is_premium or is_pocket_pair:
+            if PlayerAction.RAISE in legal_actions and random.random() < min(0.95, self.raise_frequency + 0.2):
+                # Raise 3-5x the big blind for premium/pairs
+                raise_amount = min(random.randint(3, 5) * game_state.big_blind, max_bet)
+                raise_amount = max(raise_amount, min_bet)
+                return PlayerAction.RAISE, raise_amount
+            if PlayerAction.CALL in legal_actions:
+                return PlayerAction.CALL, 0
+
+        # Suited connectors: occasionally raise, otherwise call
+        if is_suited_connector:
+            if PlayerAction.RAISE in legal_actions and random.random() < (self.raise_frequency * 0.6):
+                raise_amount = min(random.randint(2, 3) * game_state.big_blind, max_bet)
+                raise_amount = max(raise_amount, min_bet)
+                return PlayerAction.RAISE, raise_amount
+            if PlayerAction.CALL in legal_actions:
+                return PlayerAction.CALL, 0
         
+        # Fallbacks: call if available, otherwise check/fold
         if PlayerAction.CALL in legal_actions:
             return PlayerAction.CALL, 0
-            
-        return PlayerAction.CHECK, 0
+
+        if PlayerAction.CHECK in legal_actions:
+            return PlayerAction.CHECK, 0
+
+        return PlayerAction.FOLD, 0
     
 
     def _postflop_strategy(self, game_state: GameState, hole_cards: List[Card], 
